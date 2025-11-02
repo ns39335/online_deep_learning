@@ -1,5 +1,6 @@
 import csv
 from pathlib import Path
+from typing import Union
 
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
@@ -71,7 +72,7 @@ def load_data(
     num_workers: int = 2,
     batch_size: int = 128,
     shuffle: bool = False,
-) -> DataLoader | Dataset:
+) -> Union[DataLoader, Dataset]:
     """
     Constructs the dataset/dataloader.
     The specified transform_pipeline must be implemented in the SuperTuxDataset class.

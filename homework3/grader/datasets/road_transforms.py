@@ -10,6 +10,7 @@ Design pattern of the transforms:
 """
 
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -230,7 +231,7 @@ class EgoTrackProcessor:
         location: np.ndarray,
         front: np.ndarray,
         distance_down_track: float,
-        waypoints: np.ndarray | None = None,
+        waypoints: Optional[np.ndarray] = None,
         **kwargs,
     ):
         if waypoints is None:

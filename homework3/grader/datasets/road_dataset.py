@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Union
 
 import numpy as np
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
@@ -72,7 +73,7 @@ def load_data(
     num_workers: int = 2,
     batch_size: int = 32,
     shuffle: bool = False,
-) -> DataLoader | Dataset:
+) -> Union[DataLoader, Dataset]:
     """
     Constructs the dataset/dataloader.
     The specified transform_pipeline must be implemented in the RoadDataset class.

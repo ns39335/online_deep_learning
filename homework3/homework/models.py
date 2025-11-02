@@ -26,8 +26,54 @@ class Classifier(nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-        pass
+        # Convolutional layers with BatchNorm and residual connections
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+        )
+        
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2),  # 64x64 -> 32x32
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+        )
+        
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=2),  # 32x32 -> 16x16
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+        )
+        
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, padding=1, stride=2),  # 16x16 -> 8x8
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+        )
+        
+        # Global average pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+        
+        # Fully connected layers with dropout
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.5),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, num_classes),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -40,8 +86,18 @@ class Classifier(nn.Module):
         # optional: normalizes the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 6)
+        # Forward pass through convolutional layers
+        z = self.conv1(z)
+        z = self.conv2(z)
+        z = self.conv3(z)
+        z = self.conv4(z)
+        
+        # Global average pooling
+        z = self.global_pool(z)
+        z = z.view(z.size(0), -1)
+        
+        # Classification head
+        logits = self.classifier(z)
 
         return logits
 
@@ -78,8 +134,56 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-        pass
+        # Encoder (downsampling path)
+        self.down1 = self._down_block(in_channels, 16, stride=1)  # Same size
+        self.down2 = self._down_block(16, 32, stride=2)           # h/2, w/2
+        self.down3 = self._down_block(32, 64, stride=2)           # h/4, w/4
+        self.down4 = self._down_block(64, 128, stride=2)          # h/8, w/8
+        
+        # Decoder (upsampling path)
+        self.up1 = self._up_block(128, 64)           # h/4, w/4
+        self.up2 = self._up_block(64 + 64, 32)       # h/2, w/2 (with skip)
+        self.up3 = self._up_block(32 + 32, 16)       # h, w (with skip)
+        self.up4 = nn.Sequential(                     # Final refinement, same size
+            nn.Conv2d(16 + 16, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=True),
+        )
+        
+        # Segmentation head
+        self.seg_head = nn.Conv2d(16, num_classes, kernel_size=1)
+        
+        # Depth head
+        self.depth_head = nn.Sequential(
+            nn.Conv2d(16, 1, kernel_size=1),
+            nn.Sigmoid(),  # Constrain depth to [0, 1]
+        )
+    
+    def _down_block(self, in_channels: int, out_channels: int, stride: int = 2) -> nn.Module:
+        """
+        Downsampling block with two convolutions
+        """
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, stride=stride),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+    
+    def _up_block(self, in_channels: int, out_channels: int) -> nn.Module:
+        """
+        Upsampling block with transposed convolution
+        """
+        return nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -97,9 +201,21 @@ class Detector(torch.nn.Module):
         # optional: normalizes the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 3, x.size(2), x.size(3))
-        raw_depth = torch.rand(x.size(0), x.size(2), x.size(3))
+        # Encoder with skip connections
+        d1 = self.down1(z)      # (b, 16, h, w)
+        d2 = self.down2(d1)     # (b, 32, h/2, w/2)
+        d3 = self.down3(d2)     # (b, 64, h/4, w/4)
+        d4 = self.down4(d3)     # (b, 128, h/8, w/8)
+        
+        # Decoder with skip connections (U-Net style)
+        u1 = self.up1(d4)       # (b, 64, h/4, w/4)
+        u2 = self.up2(torch.cat([u1, d3], dim=1))  # (b, 32, h/2, w/2)
+        u3 = self.up3(torch.cat([u2, d2], dim=1))  # (b, 16, h, w)
+        u4 = self.up4(torch.cat([u3, d1], dim=1))  # (b, 16, h, w)
+        
+        # Segmentation and depth heads
+        logits = self.seg_head(u4)           # (b, num_classes, h, w)
+        raw_depth = self.depth_head(u4).squeeze(1)  # (b, h, w)
 
         return logits, raw_depth
 
