@@ -26,18 +26,21 @@ class MLPPlanner(nn.Module):
 
         # Input: concatenate left and right track (n_track * 2 * 2 = 40 features)
         input_dim = n_track * 2 * 2
-        hidden_dim = 256
+        hidden_dim = 512  # Increased capacity
 
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.15),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.15),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, n_waypoints * 2),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim // 2, hidden_dim // 4),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 4, n_waypoints * 2),
         )
 
     def forward(
@@ -79,7 +82,7 @@ class TransformerPlanner(nn.Module):
         self,
         n_track: int = 10,
         n_waypoints: int = 3,
-        d_model: int = 64,
+        d_model: int = 128,  # Increased from 64
     ):
         super().__init__()
 
@@ -90,21 +93,31 @@ class TransformerPlanner(nn.Module):
         # Learned query embeddings for waypoints
         self.query_embed = nn.Embedding(n_waypoints, d_model)
 
-        # Encode track points to d_model dimensions
-        self.track_encoder = nn.Linear(2, d_model)
+        # Encode track points to d_model dimensions with more capacity
+        self.track_encoder = nn.Sequential(
+            nn.Linear(2, d_model),
+            nn.LayerNorm(d_model),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+        )
 
-        # Transformer decoder layers (cross-attention)
+        # Transformer decoder layers (cross-attention) - increased capacity
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
-            nhead=4,
-            dim_feedforward=256,
-            dropout=0.1,
+            nhead=8,  # Increased from 4
+            dim_feedforward=512,  # Increased from 256
+            dropout=0.15,  # Slightly increased
             batch_first=True,
         )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=3)
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=4)  # Increased from 3
 
-        # Output projection to 2D waypoints
-        self.output_proj = nn.Linear(d_model, 2)
+        # Output projection to 2D waypoints with intermediate layer
+        self.output_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(d_model // 2, 2),
+        )
 
     def forward(
         self,
