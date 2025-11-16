@@ -6,8 +6,10 @@ Usage:
 """
 
 import argparse
+import os
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
@@ -19,33 +21,34 @@ from .models import load_model, save_model
 
 
 def train(
-    model_name: str = "mlp_planner",
-    transform: str = "state_only",
+    model_name: str,
+    transform: str = "default",
     num_epochs: int = 50,
-    batch_size: int = 128,
     learning_rate: float = 1e-3,
+    batch_size: int = 32,
     num_workers: int = 4,
-    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    log_dir: str = "logs",
+    lateral_weight: float = 1.0,
 ):
     """
     Train a planner model.
 
     Args:
-        model_name: Name of model to train (mlp_planner, transformer_planner, cnn_planner)
-        transform: Transform pipeline to use (state_only for MLP/Transformer, default for CNN)
+        model_name: Name of the model to train ('mlp_planner', 'transformer_planner', 'cnn_planner')
+        transform: Transform pipeline to apply ('default', 'state_only', 'aug')
         num_epochs: Number of training epochs
-        batch_size: Batch size for training
         learning_rate: Learning rate for optimizer
-        num_workers: Number of data loading workers
-        device: Device to train on
+        batch_size: Batch size for training
+        num_workers: Number of workers for data loading
+        log_dir: Directory to save TensorBoard logs
+        lateral_weight: Weight for lateral error in loss (default 1.0, try 2.0-3.0 for more emphasis)
     """
-    # Setup
-    device = torch.device(device)
-    print(f"Training {model_name} on {device}")
+    device = torch.device("cpu")  # Using CPU for compatibility
+    print(f"Using device: {device}")
+    print(f"Lateral error weight: {lateral_weight}")
 
     # Create log directory
-    log_dir = Path("logs") / model_name / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_dir.mkdir(parents=True, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
 
     # Load model
@@ -53,8 +56,8 @@ def train(
     model = model.to(device)
     model.train()
 
-    # Loss function (MSE for continuous waypoint prediction)
-    criterion = nn.MSELoss()
+    # Loss function (MSE with custom weighting for longitudinal vs lateral errors)
+    criterion = nn.MSELoss(reduction='none')
 
     # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -115,23 +118,30 @@ def train(
             else:
                 pred_waypoints = model(**inputs)
 
-            # Compute loss (only on valid waypoints)
-            loss = criterion(
+            # Compute loss with lateral weighting (only on valid waypoints)
+            # pred_waypoints and waypoints are [..., N, 2] where [..., :, 0] is longitudinal (x), [..., :, 1] is lateral (y)
+            mse_per_point = criterion(
                 pred_waypoints * waypoints_mask.unsqueeze(-1),
                 waypoints * waypoints_mask.unsqueeze(-1),
             )
-
+            
+            # Apply weights: standard for longitudinal (x), increased for lateral (y)
+            weights = torch.ones_like(mse_per_point)
+            weights[..., 1] = lateral_weight  # Weight lateral errors more heavily
+            
+            weighted_loss = (mse_per_point * weights).mean()
+            
             # Backward pass
-            loss.backward()
+            weighted_loss.backward()
             optimizer.step()
 
             # Track metrics
-            train_loss += loss.item()
+            train_loss += weighted_loss.item()
             train_metric.add(pred_waypoints, waypoints, waypoints_mask)
 
             # Log
             if batch_idx % 20 == 0:
-                writer.add_scalar("train/batch_loss", loss.item(), global_step)
+                writer.add_scalar("train/batch_loss", weighted_loss.item(), global_step)
 
             global_step += 1
 
@@ -163,13 +173,19 @@ def train(
                 else:
                     pred_waypoints = model(**inputs)
 
-                # Compute loss
-                loss = criterion(
+                # Compute loss with lateral weighting
+                mse_per_point = criterion(
                     pred_waypoints * waypoints_mask.unsqueeze(-1),
                     waypoints * waypoints_mask.unsqueeze(-1),
                 )
+                
+                # Apply weights: standard for longitudinal (x), increased for lateral (y)
+                weights = torch.ones_like(mse_per_point)
+                weights[..., 1] = lateral_weight
+                
+                weighted_loss = (mse_per_point * weights).mean()
 
-                val_loss += loss.item()
+                val_loss += weighted_loss.item()
                 val_metric.add(pred_waypoints, waypoints, waypoints_mask)
 
         val_loss /= len(val_data)
@@ -225,6 +241,12 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of data workers")
     parser.add_argument(
+        "--lateral_weight",
+        type=float,
+        default=1.0,
+        help="Weight for lateral error in loss (try 2.0-3.0 to emphasize steering accuracy)",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -244,5 +266,5 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.lr,
         num_workers=args.num_workers,
-        device=args.device,
+        lateral_weight=args.lateral_weight,
     )
