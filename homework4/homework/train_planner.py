@@ -29,6 +29,8 @@ def train(
     num_workers: int = 4,
     log_dir: str = "logs",
     lateral_weight: float = 1.0,
+    clip_grad_norm: float = 1.0,
+    use_augmentation: bool = False,
 ):
     """
     Train a planner model.
@@ -41,7 +43,9 @@ def train(
         batch_size: Batch size for training
         num_workers: Number of workers for data loading
         log_dir: Directory to save TensorBoard logs
-        lateral_weight: Weight for lateral error in loss (default 1.0, try 2.0-3.0 for more emphasis)
+        lateral_weight: Weight for lateral error in loss (default 1.0, try 3.0-4.0 for Transformer)
+        clip_grad_norm: Max gradient norm for clipping (helps stability with high lateral_weight)
+        use_augmentation: Use 'aug' transform for training data to improve generalization
     """
     device = torch.device("cpu")  # Using CPU for compatibility
     print(f"Using device: {device}")
@@ -62,15 +66,18 @@ def train(
     # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
-    # Learning rate scheduler
+    # Learning rate scheduler (more patient with aggressive lateral weighting)
+    patience = 8 if lateral_weight >= 3.0 else 5
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=5
+        optimizer, mode="min", factor=0.5, patience=patience
     )
 
     # Load data
+    # Use augmentation for training if enabled (helps generalization)
+    train_transform = "aug" if use_augmentation else transform
     train_data = load_data(
         "drive_data/train",
-        transform_pipeline=transform,
+        transform_pipeline=train_transform,
         return_dataloader=True,
         num_workers=num_workers,
         batch_size=batch_size,
@@ -244,7 +251,18 @@ if __name__ == "__main__":
         "--lateral_weight",
         type=float,
         default=1.0,
-        help="Weight for lateral error in loss (try 2.0-3.0 to emphasize steering accuracy)",
+        help="Weight for lateral error in loss (try 3.0-4.0 for Transformer to emphasize steering)",
+    )
+    parser.add_argument(
+        "--clip_grad_norm",
+        type=float,
+        default=1.0,
+        help="Max gradient norm for clipping (0 to disable, 1.0 default for stability)",
+    )
+    parser.add_argument(
+        "--augmentation",
+        action="store_true",
+        help="Use data augmentation for training (improves generalization, reduces val error)",
     )
     parser.add_argument(
         "--device",
@@ -267,4 +285,6 @@ if __name__ == "__main__":
         learning_rate=args.lr,
         num_workers=args.num_workers,
         lateral_weight=args.lateral_weight,
+        clip_grad_norm=args.clip_grad_norm,
+        use_augmentation=args.augmentation,
     )
